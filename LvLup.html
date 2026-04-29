@@ -702,8 +702,39 @@ function installDefaultSessions() {
     ]
   };
 
+  const kineCourt = {
+    id: 'default_003',
+    name: 'KINÉ COURT',
+    locked: true,
+    blocks: [
+      {
+        id: 'kc1', name: 'ÉCHAUFFEMENT', blockReps: 1,
+        exercises: [
+          { id:'kc1e1', name:'Vélo', type:'TIME', workDuration:300, restDuration:10, timesReps:1,
+            desc:'Cardio sur vélo statique ou spinning, rythme modéré constant' }
+        ]
+      },
+      {
+        id: 'kc2', name: 'RENFORCEMENT', blockReps: 3,
+        exercises: [
+          { id:'kc2e1', name:'Gainage coude', type:'TIME', workDuration:30, restDuration:10, timesReps:1,
+            desc:'Avant-bras au sol. Serre abdos + fessiers. Ne creuse pas le bas du dos. Respiration lente.' },
+          { id:'kc2e2', name:'Parachute', type:'TIME', workDuration:30, restDuration:10, timesReps:1,
+            desc:'Sur le ventre, lever simultanément les bras et les pieds pour renforcer le dos. Contrôle la montée et la descente.' }
+        ]
+      },
+      {
+        id: 'kc3', name: 'ÉTIREMENTS', blockReps: 1,
+        exercises: [
+          { id:'kc3e1', name:'Divers exercices d\'étirement', type:'TIME', workDuration:40, restDuration:5, timesReps:14,
+            desc:'Pas d\'étirement agressif. Respiration lente. Pas de douleur nerveuse.' }
+        ]
+      }
+    ]
+  };
+
   // Upsert : met à jour si déjà présente, sinon ajoute
-  [focusBas, focusHaut].forEach(def => {
+  [focusBas, focusHaut, kineCourt].forEach(def => {
     const idx = S.sessions.findIndex(x => x.id === def.id);
     if (idx > -1) {
       S.sessions[idx] = def;  // remplace avec les valeurs corrigées
@@ -1338,18 +1369,38 @@ function finishWorkout() {
     sessionName:w.session.name, totalDuration:dur, blocksCompleted:w.blocks.size };
   S.journal.unshift(entry);
   save(K.journal, S.journal);
+  // Calcul calories basé sur la durée théorique des exercices
+  const poids = jParse('lvlup_user', {}).poids || S.user?.poids || 75;
+  let totalSec = 0;
+  (w.session.blocks || []).forEach(b => {
+    const br = b.blockReps || 1;
+    (b.exercises || []).forEach(ex => {
+      const tr = ex.timesReps || 1;
+      if (ex.type === 'TIME') {
+        totalSec += ((ex.workDuration || 0) + (ex.restDuration || 0)) * tr * br;
+      } else {
+        totalSec += (ex.restDuration || 0) * tr * br;
+      }
+    });
+  });
+  const dureeH = totalSec / 3600;
+  const kcal = Math.round(4.5 * poids * dureeH);
+  const xp   = Math.max(10, Math.round(kcal / 2));
   // XP
   const prevLevel = S.xp.level;
-  S.xp.totalXP += 100;
+  S.xp.totalXP += xp;
   S.xp.level = calcLevel(S.xp.totalXP);
   S.xp.lastSessionDate = new Date().toISOString();
   save(K.xp, S.xp);
   w.sumDur = dur; w.sumBlocks = w.blocks.size; w.sumName = w.session.name;
-  w.xpGained = 100;
+  w.xpGained = xp;
+  w.kcal     = kcal;
   w.levelUp  = S.xp.level > prevLevel;
   if (w.levelUp) S.pendingFlash = true;
   beepEnd(); setTimeout(beepEnd, 700);
   S.view='summary'; render();
+  showParticles();
+  if (w.levelUp) showLevelUpOverlay(prevLevel, S.xp.level);
 }
 
 // ─── SUMMARY ─────────────────────────────────────────────────
@@ -1381,6 +1432,10 @@ function renderSummary(c) {
       color:var(--green);text-shadow:0 0 16px rgba(0,255,136,.6);letter-spacing:2px;font-weight:bold">
       +${w.xpGained} XP
     </div>
+    <div style="text-align:center;margin:-6px 0 14px;font-family:var(--f-mono);font-size:14px;
+      color:var(--cyan);letter-spacing:1px;opacity:.85">
+      🔥 ${w.kcal} kcal
+    </div>
     ${lvlUpBlock}
     <div style="margin:0 0 20px">
       <div style="display:flex;justify-content:space-between;font-size:11px;
@@ -1404,6 +1459,94 @@ function renderSummary(c) {
   </div>`;
 }
 function backToList(){ S.wk=null; S.lSession=null; S.view='home'; S.tab='training'; render(); }
+
+// ─── PARTICULES HOLOGRAPHIQUES ────────────────────────────────
+function showParticles() {
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:9998;pointer-events:none;';
+  document.body.appendChild(canvas);
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const ctx = canvas.getContext('2d');
+  const cx  = canvas.width  / 2;
+  const cy  = canvas.height / 2;
+  const colors = ['#00ffff', '#00ff88'];
+  const particles = Array.from({ length: 60 }, () => {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 80 + Math.random() * 320;
+    return { x: cx, y: cy,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      color: colors[Math.floor(Math.random() * 2)],
+      size: 2 + Math.random() * 4 };
+  });
+  const duration = 1500;
+  const start = performance.now();
+  const dt = 1 / 60;
+  function animate(now) {
+    const progress = Math.min((now - start) / duration, 1);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    particles.forEach(p => {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vy += 180 * dt;
+      const alpha = Math.max(0, 1 - progress);
+      const hex   = Math.floor(alpha * 255).toString(16).padStart(2, '0');
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fillStyle = p.color + hex;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur  = 10;
+      ctx.fill();
+    });
+    if (progress < 1) { requestAnimationFrame(animate); }
+    else { canvas.remove(); }
+  }
+  requestAnimationFrame(animate);
+}
+
+// ─── OVERLAY LEVEL UP ─────────────────────────────────────────
+function showLevelUpOverlay(prevLevel, newLevel) {
+  const oldSrc = CHARS[prevLevel] || CHARS[1];
+  const newSrc = CHARS[newLevel] || CHARS[newLevel - 1];
+  const overlay = document.createElement('div');
+  overlay.style.cssText = [
+    'position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;',
+    'background:rgba(0,0,0,0.92);display:flex;flex-direction:column;',
+    'align-items:center;justify-content:center;transition:opacity .5s;'
+  ].join('');
+  overlay.innerHTML = `
+    <div style="text-align:center;padding:24px 32px;">
+      <div style="font-family:var(--f-title,monospace);font-size:44px;color:#00ffff;
+        letter-spacing:4px;text-shadow:0 0 30px #00ffff,0 0 60px #00ffff,0 0 90px #00ffff;
+        margin-bottom:6px;">LEVEL UP</div>
+      <div style="font-family:var(--f-mono,monospace);font-size:18px;color:#00ff88;
+        letter-spacing:3px;text-shadow:0 0 14px #00ff88;margin-bottom:24px;">
+        NIVEAU ${newLevel}</div>
+      <div style="position:relative;width:190px;height:190px;margin:0 auto 28px;">
+        <img id="_luo_old" src="${oldSrc}" style="position:absolute;top:0;left:0;
+          width:100%;height:100%;object-fit:contain;transition:opacity .6s;filter:drop-shadow(0 0 12px #00ffff);">
+        <img id="_luo_new" src="${newSrc}" style="position:absolute;top:0;left:0;
+          width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .8s;filter:drop-shadow(0 0 16px #00ff88);">
+      </div>
+      <button id="_luo_btn" style="background:transparent;border:2px solid #00ffff;
+        color:#00ffff;font-family:var(--f-title,monospace);font-size:15px;
+        letter-spacing:4px;padding:14px 36px;border-radius:4px;cursor:pointer;
+        text-shadow:0 0 12px #00ffff;box-shadow:0 0 20px rgba(0,255,255,.35),inset 0 0 20px rgba(0,255,255,.05);
+        text-transform:uppercase;">ÉVOLUER</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('_luo_btn').addEventListener('click', () => {
+    const oldImg = document.getElementById('_luo_old');
+    const newImg = document.getElementById('_luo_new');
+    if (oldImg) oldImg.style.opacity = '0';
+    setTimeout(() => { if (newImg) newImg.style.opacity = '1'; }, 100);
+    setTimeout(() => {
+      overlay.style.opacity = '0';
+      setTimeout(() => overlay.remove(), 500);
+    }, 1100);
+  });
+}
 
 // ─── SCIATIMER ───────────────────────────────────────────────
 let _sciaIv = null;
@@ -1703,7 +1846,7 @@ function cardioSaveManual() {
 function _cardioFinish(data) {
   const f = S.cardioFlow;
   const cfg = CARDIO_TYPES[f.type] || CARDIO_TYPES['Autre'];
-  const xp = Math.max(10, Math.min(100, Math.round(data.calories / 350 * 100)));
+  const xp = Math.max(10, Math.round(data.calories / 2));
   const entry = {
     id: uid(), date: new Date().toISOString(),
     type: 'cardio', activityType: f.type, icon: cfg.icon,
@@ -1719,10 +1862,13 @@ function _cardioFinish(data) {
   S.xp.level = calcLevel(S.xp.totalXP);
   S.xp.lastSessionDate = new Date().toISOString();
   save(K.xp, S.xp);
-  if (S.xp.level > prevLevel) S.pendingFlash = true;
+  const didLevelUp = S.xp.level > prevLevel;
+  if (didLevelUp) S.pendingFlash = true;
   f.recap = { ...data, xp };
   f.step = 'done';
   render();
+  showParticles();
+  if (didLevelUp) showLevelUpOverlay(prevLevel, S.xp.level);
 }
 
 let _ytEffort = null;
